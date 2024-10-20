@@ -1,7 +1,8 @@
 import json
 import os
+import shutil
 import sys
-from typing import Self
+from typing import cast
 
 from PIL import Image
 
@@ -14,13 +15,8 @@ class Asset:
         else:
             self.image = source
 
-    def format(self, mode: str) -> Self:
-        self.image = self.image.convert(mode)
-        return self
-
-    def store(self, name: str) -> Self:
-        self.image.save(f"out/{name}.png")
-        return self
+    def store(self, name: str, format_: str) -> None:
+        self.image.convert(format_).save(f"out/{name}.png")
 
 
 class AssetMap(Asset):
@@ -32,8 +28,8 @@ class AssetMap(Asset):
     def select(self, row: int, col: int) -> Asset:
         width = self.image.size[0] / self.cols
         height = self.image.size[1] / self.rows
-        x = width * (col - 1)
-        y = height * (row - 1)
+        x = width * col
+        y = height * row
         return Asset(self.image.crop((x, y, x + width, y + height)))
 
 
@@ -51,11 +47,12 @@ def main() -> None:
         print('Build config "assets.json" is a directory')
         return
 
-    try:
-        os.mkdir("out")
-    except FileExistsError:
+    if os.path.exists("out"):
         if not os.path.isdir("out"):
             print('Cannot write output because "out" is not a directory')
+            return
+        shutil.rmtree("out")
+    os.mkdir("out")
 
     assets: dict[str, Asset] = {}
 
@@ -67,6 +64,17 @@ def main() -> None:
             assets[source["name"]] = Asset(source["path"])
         except FileNotFoundError:
             print(f'Missing source file "{source["path"]}"')
+
+    for output in build_config["output"]:
+        if (source := output["source"]) not in assets:
+            print(f'Source "{source}" undefined')
+            return
+        format_: str = "RGBA" if output.get("alpha", False) else "RGB"
+        if "row" in output and "col" in output:
+            asset = cast(AssetMap, assets[output["source"]]).select(output["row"], output["col"])
+        else:
+            asset = assets[output["source"]]
+        asset.store(output["name"], format_)
 
 
 if __name__ == "__main__":
