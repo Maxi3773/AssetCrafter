@@ -8,7 +8,7 @@ from PIL import Image
 
 
 class Asset:
-    def __init__(self, source: str | Image.Image):
+    def __init__(self, source: Image.Image | str):
         self.image: Image.Image
         if isinstance(source, str):
             self.image = Image.open(f"src/{source}.png")
@@ -23,12 +23,12 @@ class Asset:
     def size(self) -> tuple[int, int]:
         return self.image.size
 
-    def store(self, name: str, format_: str) -> None:
+    def save(self, name: str, format_: str) -> None:
         self.image.convert(format_).save(f"out/{name}.png")
 
 
 class AssetMap(Asset):
-    def __init__(self, source: str, rows: int = 1, cols: int = 1):
+    def __init__(self, source: Image.Image | str, rows: int, cols: int):
         super().__init__(source)
         self.rows: int = rows
         self.cols: int = cols
@@ -39,32 +39,29 @@ class AssetMap(Asset):
 
     def select(self, row: int, col: int) -> Asset:
         width, height = self.tile_size
-        x = width * col
-        y = height * row
+        x, y = width * col, height * row
         return Asset(self.image.crop((x, y, x + width, y + height)))
 
 
-def map_(sources: list[Asset], content: list[list[list[int]]]) -> Asset:
-    tile_sizes = set()
-    for source in sources:
-        if isinstance(source, AssetMap):
-            tile_sizes.add(source.tile_size)
-        else:
-            tile_sizes.add(source.size)
-    if len(tile_sizes) != 1:
-        raise ValueError()
-    tile_width, tile_height = tile_sizes.pop()
-    size = tile_width * len(content[0]), tile_height * len(content)
-    format_ = "RGBA" if "RGBA" in [source.format for source in sources] else "RGB"
-    image = Image.new(format_, size)
+def get_tile_size(asset: Asset) -> tuple[int, int]:
+    if isinstance(asset, AssetMap):
+        return asset.tile_size
+    else:
+        return asset.size
+
+
+def create_map(sources: list[Asset], content: list[list[list[int]]]) -> AssetMap:
+    format_: str = "RGBA" if "RGBA" in (source.format for source in sources) else "RGB"
+    tile_width, tile_height = max({get_tile_size(source) for source in sources})
+    width, height = tile_width * len(content[0]), tile_height * len(content)
+    image = Image.new(format_, (width, height))
     for row, cols in enumerate(content):
         for col, tile in enumerate(cols):
             source = sources[tile[0]]
             if isinstance(source, AssetMap):
-                image.paste(source.select(tile[1], tile[2]).image, (col * tile_width, row * tile_height))
-            else:
-                image.paste(source.image, (col * tile_width, row * tile_height))
-    return Asset(image)
+                source = source.select(tile[1], tile[2])
+            image.paste(source.image, (col * tile_width, row * tile_height))
+    return AssetMap(image, height // tile_height, width // tile_width)
 
 
 def main() -> None:
@@ -72,13 +69,13 @@ def main() -> None:
     os.chdir(path)
 
     try:
-        with open("assets.json", "r") as build_config_file:
-            build_config = json.load(build_config_file)
+        with open("assets.json", "r") as asset_config_file:
+            asset_config = json.load(asset_config_file)
     except FileNotFoundError:
-        print('Build config "assets.json" not found')
+        print('Asset config "assets.json" not found')
         return
     except IsADirectoryError:
-        print('Build config "assets.json" is a directory')
+        print('Asset config "assets.json" is a directory')
         return
 
     if os.path.exists("out"):
@@ -90,23 +87,28 @@ def main() -> None:
 
     assets: dict[str, Asset] = {}
 
-    # 1. Load sources
-    for source in build_config["sources"]:
+    # Sources
+    for source in asset_config["sources"]:
         try:
             if "rows" in source and "cols" in source:
                 assets[source["name"]] = AssetMap(source["path"], source["rows"], source["cols"])
-                continue
-            assets[source["name"]] = Asset(source["path"])
+            else:
+                assets[source["name"]] = Asset(source["path"])
         except FileNotFoundError:
             print(f'Missing source file "{source["path"]}"')
 
-    # 2. Process
-    for process in build_config["process"]:
-        if "map" in process:
-            assets[process["name"]] = map_([assets[source] for source in process["sources"]], process["map"])
+    # Artifacts
+    for artifact in asset_config["artifacts"]:
+        sources: list[Asset] = [assets[source] for source in artifact["sources"]]
+        match artifact["type"]:
+            case "map":
+                assets[artifact["name"]] = create_map(sources, **artifact["attributes"])
+            case _ as type_:
+                print(f'Unknown artifact type "{type_}"')
+                return
 
-    # 3. Output
-    for output in build_config["output"]:
+    # Output
+    for output in asset_config["output"]:
         if (source := output["source"]) not in assets:
             print(f'Source "{source}" undefined')
             return
@@ -115,7 +117,7 @@ def main() -> None:
             asset = cast(AssetMap, assets[output["source"]]).select(output["row"], output["col"])
         else:
             asset = assets[output["source"]]
-        asset.store(output["name"], format_)
+        asset.save(output["name"], format_)
 
 
 if __name__ == "__main__":
