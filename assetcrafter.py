@@ -2,7 +2,7 @@ import json
 import os
 import shutil
 import sys
-from typing import cast
+from typing import Any, cast
 
 from PIL import Image
 
@@ -48,6 +48,21 @@ def get_tile_size(asset: Asset) -> tuple[int, int]:
         return asset.tile_size
     else:
         return asset.size
+
+
+def create_icon(source: Asset, width: int, height: int, scaling: dict[str, Any] | None = None) -> Asset:
+    if scaling is None or scaling["smooth"]:
+        resampling_filter = None
+    else:
+        resampling_filter = Image.Resampling.NEAREST
+    content = source.image.crop(source.image.getbbox())
+    original_width, original_height = content.size
+    aspect_ratio = min(width / original_width, height / original_height)
+    new_width, new_height = int(original_width * aspect_ratio), int(original_height * aspect_ratio)
+    resized_image = content.resize((new_width, new_height), resampling_filter)
+    icon = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    icon.paste(resized_image, ((width - new_width) // 2, (height - new_height) // 2))
+    return Asset(icon)
 
 
 def create_map(sources: list[Asset], content: list[list[list[int]]]) -> AssetMap:
@@ -101,6 +116,14 @@ def main() -> None:
     for artifact in asset_config["artifacts"]:
         sources: list[Asset] = [assets[source] for source in artifact["sources"]]
         match artifact["type"]:
+            case "icon":
+                if len(sources) > 1:
+                    print("Icon only uses the first source")
+                if "row" in artifact and "col" in artifact:
+                    source = cast(AssetMap, sources[0]).select(artifact["row"], artifact["col"])
+                else:
+                    source = sources[0]
+                assets[artifact["name"]] = create_icon(source, **artifact["attributes"])
             case "map":
                 assets[artifact["name"]] = create_map(sources, **artifact["attributes"])
             case _ as type_:
